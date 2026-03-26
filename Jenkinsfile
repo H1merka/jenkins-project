@@ -63,26 +63,27 @@ pipeline {
 
         stage('Smoke Test') {
             steps {
-                // Увеличим время ожидания до 5 секунд (внутри Docker модели иногда грузятся долго)
+                // Даем контейнеру время на запуск
                 sh 'sleep 5'
                 
                 sh '''#!/bin/bash
-                # Добавил флаг -L (чтобы curl шел по редиректам, если они есть) 
-                # и стучимся именно на /predict
-                RESPONSE=$(curl -sS -L -X POST http://127.0.0.1:8000/predict \
+                # 1. Получаем внутренний IP-адрес нашего Docker-контейнера
+                CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ml-amazon-sales)
+                echo "Container internal IP is: $CONTAINER_IP"
+
+                # 2. Стучимся НАПРЯМУЮ в контейнер по его IP на порт 80 (где и слушает Uvicorn)
+                # Это исключает любые конфликты портов в WSL и Windows!
+                RESPONSE=$(curl -sS -X POST http://$CONTAINER_IP:80/predict \
                 -H "Content-Type: application/json" \
                 -d '{"inputs":[{"price": 100.0, "discount_percent": 5.0, "quantity_sold": 2, "rating": 4.5, "review_count": 100, "product_category": 1, "customer_region": 1, "payment_method": 1, "order_year": 2023, "order_month": 5}]}')
 
                 echo "Response from API: $RESPONSE"
                 
-                if [[ "$RESPONSE" == *"error"* ]] || [[ "$RESPONSE" == *"405 Not Allowed"* ]] || [[ "$RESPONSE" == *"Not Found"* ]]; then
+                if [[ "$RESPONSE" == *"error"* ]] || [[ "$RESPONSE" == *"405 Not Allowed"* ]] || [[ "$RESPONSE" == *"Not Found"* ]] || [[ -z "$RESPONSE" ]]; then
                     echo "Smoke test failed! API returned an error or 404."
-                    
-                    # ДИАГНОСТИКА: выведем логи самого контейнера, чтобы понять, что там запустилось!
                     echo "--- DOCKER CONTAINER LOGS ---"
                     docker logs ml-amazon-sales
                     echo "-----------------------------"
-                    
                     exit 1
                 fi
                 
@@ -90,7 +91,6 @@ pipeline {
                     echo "Smoke test PASSED! Model is working."
                 else
                     echo "Unexpected response format!"
-                    # ДИАГНОСТИКА
                     docker logs ml-amazon-sales
                     exit 1
                 fi
