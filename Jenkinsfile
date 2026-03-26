@@ -55,35 +55,28 @@ pipeline {
 
         stage('Run Service') {
             steps {
-                // Запускаем контейнер с моделью на порту 8000, избегая конфликта с Nginx (порт 80)
                 sh "docker rm -f ml-amazon-sales || true"
-                sh "docker run -d --name ml-amazon-sales -p 8000:80 ml-amazon-sales:${env.BUILD_NUMBER}"
+                // Пробрасываем на порт 8585, чтобы обойти любые старые зависшие процессы Flask/MLflow
+                sh "docker run -d --name ml-amazon-sales -p 8585:80 ml-amazon-sales:${env.BUILD_NUMBER}"
             }
         }
 
         stage('Smoke Test') {
             steps {
-                // Даем контейнеру время на запуск
+                // Ждем инициализации
                 sh 'sleep 5'
                 
                 sh '''#!/bin/bash
-                # 1. Получаем внутренний IP-адрес нашего Docker-контейнера
-                CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ml-amazon-sales)
-                echo "Container internal IP is: $CONTAINER_IP"
-
-                # 2. Стучимся НАПРЯМУЮ в контейнер по его IP на порт 80 (где и слушает Uvicorn)
-                # Это исключает любые конфликты портов в WSL и Windows!
-                RESPONSE=$(curl -sS -X POST http://$CONTAINER_IP:80/predict \
+                # Обращаемся на наш новый чистый порт 8585
+                RESPONSE=$(curl -sS -X POST http://127.0.0.1:8585/predict \
                 -H "Content-Type: application/json" \
                 -d '{"inputs":[{"price": 100.0, "discount_percent": 5.0, "quantity_sold": 2, "rating": 4.5, "review_count": 100, "product_category": 1, "customer_region": 1, "payment_method": 1, "order_year": 2023, "order_month": 5}]}')
 
                 echo "Response from API: $RESPONSE"
                 
                 if [[ "$RESPONSE" == *"error"* ]] || [[ "$RESPONSE" == *"405 Not Allowed"* ]] || [[ "$RESPONSE" == *"Not Found"* ]] || [[ -z "$RESPONSE" ]]; then
-                    echo "Smoke test failed! API returned an error or 404."
-                    echo "--- DOCKER CONTAINER LOGS ---"
+                    echo "Smoke test failed! API returned an error."
                     docker logs ml-amazon-sales
-                    echo "-----------------------------"
                     exit 1
                 fi
                 
